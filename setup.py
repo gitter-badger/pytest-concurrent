@@ -21,7 +21,7 @@ setup(
     license='MIT',
     url='https://github.com/reverbc/pytest-concurrent',
     description='Concurrently execute test cases with multithread'
-                ', multiprocess and asyncio',
+                ', multiprocess and gevent',
     long_description=read('README.rst'),
     py_modules=['pytest_concurrent'],
     install_requires=['pytest>=3.1.1'],
