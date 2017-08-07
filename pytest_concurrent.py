@@ -3,7 +3,6 @@
 import multiprocessing
 import concurrent.futures
 import pytest
-import gevent
 from _pytest.terminal import TerminalReporter
 from _pytest.junitxml import LogXML
 from _pytest.junitxml import _NodeReporter
@@ -64,6 +63,8 @@ def pytest_runtestloop(session):
                 executor.submit(_run_next_item, session, item, index)
 
     elif mode == "gevent":
+        import gevent.monkey
+        import gevent.pool
         gevent.monkey.patch_all()
         pool = gevent.pool.Pool(worker)
         for index, item in enumerate(session.items):
