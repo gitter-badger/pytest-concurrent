@@ -43,11 +43,6 @@ setup(
         'Operating System :: OS Independent',
         'License :: OSI Approved :: MIT License',
     ],
-    entry_points={
-        'pytest11': [
-            'concurrent = pytest_concurrent',
-        ],
-    },
     setup_requires=['pytest-runner'],
     tests_require=['pytest'],
 )
