@@ -5,6 +5,8 @@ import py
 import time
 import multiprocessing
 import concurrent.futures
+import collections
+
 import pytest
 from _pytest.junitxml import LogXML
 from _pytest.terminal import TerminalReporter
@@ -58,6 +60,25 @@ def pytest_addoption(parser):
 
 def pytest_runtestloop(session):
     ### Use the variable to modify the mode of execution, avaliable options = multithread, multiprocess, async, sequential
+    groups = collections.defaultdict(list)
+    ungrouped_items = list()
+    for item in session.items:
+        concurrent_group_marker = item.get_marker('concurrent_group')
+        concurrent_group = None
+
+        if concurrent_group_marker is not None:
+            if 'args' in dir(concurrent_group_marker) and concurrent_group_marker.args:
+                concurrent_group = concurrent_group_marker.args[0]
+            if 'kwargs' in dir(concurrent_group_marker) and 'group' in concurrent_group_marker.kwargs:
+                # kwargs beat args
+                concurrent_group = concurrent_group_marker.kwargs['group']
+
+        if concurrent_group:
+            if not isinstance(concurrent_group, int):
+                raise TypeError('Concurrent Group needs to be an integer')
+            groups[concurrent_group].append(item)
+        else:
+            ungrouped_items.append(item)
 
     if (session.testsfailed and
             not session.config.option.continue_on_collection_errors):
@@ -69,11 +90,21 @@ def pytest_runtestloop(session):
 
     mode = session.config.option.concurrent_mode
     worker = None if session.config.option.concurrent_workers is None else int(session.config.option.concurrent_workers)
+
+    for group in sorted(groups):
+        _run_items(mode=mode, items=groups[group], session=session, worker=worker)
+    if ungrouped_items:
+        _run_items(mode=mode, items=ungrouped_items, session=session, worker=worker)
+
+    return True
+
+
+def _run_items(mode, items, session, worker=None):
     ### Multiprocess is not compatible with Windows !!! ###
     if mode == "multiprocess":
         procs_pool = dict()
 
-        for index, item in enumerate(session.items):
+        for index, item in enumerate(items):
             procs_pool[index] = multiprocessing.Process(target=_run_next_item, args=(session, item, index))
             procs_pool[index].start()
 
@@ -83,25 +114,25 @@ def pytest_runtestloop(session):
     ## Achieve async using Python's concurrent library ###
     elif mode == "multithread":
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            for index, item in enumerate(session.items):
+            for index, item in enumerate(items):
                 executor.submit(_run_next_item, session, item, index)
 
     elif mode == "gevent":
         import gevent.monkey
         import gevent.pool
         gevent.monkey.patch_all()
-        pool = gevent.pool.Pool(worker)
-        for index, item in enumerate(session.items):
+        pool = gevent.pool.Pool(size=worker)
+        for index, item in enumerate(items):
             pool.spawn(_run_next_item, session, item, index)
         pool.join()
 
     else:
-        for i, item in enumerate(session.items):
-            nextitem = session.items[i + 1] if i + 1 < len(session.items) else None
+        for i, item in enumerate(items):
+            nextitem = items[i + 1] if i + 1 < len(items) else None
             item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
             if session.shouldstop:
                 raise session.Interrupted(session.shouldstop)
-    return True
+
 
 def _run_next_item(session, item, i):
 
