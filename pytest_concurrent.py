@@ -1,17 +1,41 @@
 # -*- coding: utf-8 -*-
-
+import re
+import os
+import py
+import time
 import multiprocessing
 import concurrent.futures
 import pytest
-from _pytest.terminal import TerminalReporter
 from _pytest.junitxml import LogXML
+from _pytest.terminal import TerminalReporter
+from _pytest.junitxml import Junit
 from _pytest.junitxml import _NodeReporter
+from _pytest.junitxml import bin_xml_escape
+from _pytest.junitxml import mangle_test_address
 
+### Manager for the shared variables being used by in multiprocess mode
 MANAGER = multiprocessing.Manager()
+
+### XMLSTATS is a shared variable used to override the local variable self.stats from LogXML
+XMLSTATS = MANAGER.dict()
+XMLSTATS['error'] = 0
+XMLSTATS['passed'] = 0
+XMLSTATS['failure'] = 0
+XMLSTATS['skipped'] = 0
+### XMLLOCK ensures that XMLSTATS is not being modified simultaneously
+XMLLOCK = multiprocessing.Lock()
+
+XMLREPORTER = MANAGER.dict()
+# XMLREPORTER_ORDERED = MANAGER.list()
+NODELOCK = multiprocessing.Lock()
+NODEREPORTS = MANAGER.list()
+
+### DICTIONARY is a shared variable used to keep track of the log for TerminalReporter
 DICTIONARY = MANAGER.dict()
+### STATS is a shared variable used to override the local variable self.stats from TerminalReporter
 STATS = MANAGER.dict()
+### LOCK ensures that STATS is not being modified simultaneously
 LOCK = multiprocessing.Lock()
-NODE_REPORTERS = MANAGER.dict()
 
 def pytest_addoption(parser):
     group = parser.getgroup('concurrent')
@@ -80,11 +104,9 @@ def pytest_runtestloop(session):
     return True
 
 def _run_next_item(session, item, i):
-    # thread_name = "Thread " + str(i)
-    # print("%s: %s" % (thread_name, time.ctime(time.time())))
+
     nextitem = session.items[i+1] if i+1 < len(session.items) else None
     item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
-    # print(str(i) + " " + str(item))
     if session.shouldstop:
         raise session.Interrupted(session.shouldstop)
 
@@ -97,12 +119,15 @@ def pytest_configure(config):
     config.pluginmanager.unregister(standard_reporter)
     config.pluginmanager.register(concurrent_reporter, 'terminalreporter')
 
-    # xmlpath = config.option.xmlpath
-    # standard_logger = config.pluginmanager.getplugin(config._xml)
-    # concurrent_logger = NewLogXML(xmlpath, config.option.junitprefix, config.getini("junit_suite_name"))
-    # config.pluginmanager.register(concurrent_logger, config._xml)
+        if config.option.xmlpath is not None:
+            xmlpath = config.option.xmlpath
+            config.pluginmanager.unregister(config._xml)
+            config._xml = ConcurrentLogXML(xmlpath, config.option.junitprefix, config.getini("junit_suite_name"))
+            config.pluginmanager.register(config._xml)
 
-class _ConcurrentNodeReporter(_NodeReporter):
+
+### 
+class ConcurrentNodeReporter(_NodeReporter):
     def __init__(self, nodeid, xml):
 
         self.id = nodeid
@@ -114,100 +139,117 @@ class _ConcurrentNodeReporter(_NodeReporter):
         self.testcase = None
         self.attrs = {}
 
-    def append(self, node):
-        self.xml.add_stats(type(node).__name__)
-        self.nodes.append(node)
+    def to_xml(self): ##overriden 
+        testcase = Junit.testcase(time=self.duration, **self.attrs)
+        print("TESTCASE:" + str(testcase) + " info = " + str(self.duration) + " " + str(self.attrs))
+        testcase.append(self.make_properties_node())
+        for node in self.nodes:
+            testcase.append(node)
+        return str(testcase.unicode(indent=0))
 
-# class NewLogXML(LogXML):
-#     def __init__(self, logfile, prefix, suite_name="pytest"):
-#         logfile = os.path.expanduser(os.path.expandvars(logfile))
-#         self.logfile = os.path.normpath(os.path.abspath(logfile))
-#         self.prefix = prefix
-#         self.suite_name = suite_name
-#         self.stats = dict.fromkeys([
-#             'error',
-#             'passed',
-#             'failure',
-#             'skipped',
-#         ], 0)
-#         self.node_reporters = NODE_REPORTERS  # nodeid -> _NodeReporter
-#         self.node_reporters_ordered = []
-#         self.global_properties = []
-#         # List of reports that failed on call but teardown is pending.
-#         self.open_reports = []
-#         self.cnt_double_fail_tests = 0
+    def record_testreport(self, testreport):
+        print("TEST: " + str(testreport))
+        assert not self.testcase
+        names = mangle_test_address(testreport.nodeid)
+        classnames = names[:-1]
+        if self.xml.prefix:
+            classnames.insert(0, self.xml.prefix)
+        attrs = {
+            "classname": ".".join(classnames),
+            "name": bin_xml_escape(names[-1]),
+            "file": testreport.location[0],
+        }
+        if testreport.location[1] is not None:
+            attrs["line"] = testreport.location[1]
+        if hasattr(testreport, "url"):
+            attrs["url"] = testreport.url
+        self.attrs = attrs
 
-    # def pytest_runtest_logreport(self, report):
-    #     close_report = None
-    #     if report.passed:
-    #         if report.when == "call":  # ignore setup/teardown
-    #             reporter = self._opentestcase(report)
-    #             reporter.append_pass(report)
-    #     elif report.failed:
-    #         if report.when == "teardown":
-    #             # The following vars are needed when xdist plugin is used
-    #             report_wid = getattr(report, "worker_id", None)
-    #             report_ii = getattr(report, "item_index", None)
-    #             close_report = next(
-    #                 (rep for rep in self.open_reports
-    #                  if (rep.nodeid == report.nodeid and
-    #                      getattr(rep, "item_index", None) == report_ii and
-    #                      getattr(rep, "worker_id", None) == report_wid)), None)
-    #             if close_report:
-    #                 # We need to open new testcase in case we have failure in
-    #                 # call and error in teardown in order to follow junit
-    #                 # schema
-    #                 self.finalize(close_report)
-    #                 self.cnt_double_fail_tests += 1
-    #         reporter = self._opentestcase(report)
-    #         if report.when == "call":
-    #             reporter.append_failure(report)
-    #             self.open_reports.append(report)
-    #         else:
-    #             reporter.append_error(report)
-    #     elif report.skipped:
-    #         reporter = self._opentestcase(report)
-    #         reporter.append_skipped(report)
-    #     self.update_testcase_duration(report)
-    #     if report.when == "teardown":
-    #         reporter = self._opentestcase(report)
-    #         reporter.write_captured_output(report)
-    #         self.finalize(report)
-    #         report_wid = getattr(report, "worker_id", None)
-    #         report_ii = getattr(report, "item_index", None)
-    #         close_report = next(
-    #             (rep for rep in self.open_reports
-    #              if (rep.nodeid == report.nodeid and
-    #                  getattr(rep, "item_index", None) == report_ii and
-    #                  getattr(rep, "worker_id", None) == report_wid)), None)
-    #         if close_report:
-    #             self.open_reports.remove(close_report)
+    def finalize(self):
+        data = self.to_xml() #.unicode(indent=0)
+        self.__dict__.clear()
+        self.to_xml = lambda: py.xml.raw(data)
+        NODEREPORTS.append(data)
 
+### ConcurrentLogXML is used to provide XML reporting for multiprocess mode
+class ConcurrentLogXML(LogXML):
+
+    def __init__(self, logfile, prefix, suite_name="pytest"):
+        logfile = logfile
+        logfile = os.path.expanduser(os.path.expandvars(logfile))
+        self.logfile = os.path.normpath(os.path.abspath(logfile))
+        self.prefix = prefix
+        self.suite_name = suite_name
+        self.stats = XMLSTATS
+        self.node_reporters = {}#XMLREPORTER  # nodeid -> _NodeReporter
+        self.node_reporters_ordered = []
+        self.global_properties = []
+        # List of reports that failed on call but teardown is pending.
+        self.open_reports = []
+        self.cnt_double_fail_tests = 0
+
+    def pytest_sessionfinish(self):
+        dirname = os.path.dirname(os.path.abspath(self.logfile))
+        if not os.path.isdir(dirname):
+            os.makedirs(dirname)
+        logfile = open(self.logfile, 'w', encoding='utf-8')
+        suite_stop_time = time.time()
+        suite_time_delta = suite_stop_time - self.suite_start_time
+
+        numtests = (self.stats['passed'] + self.stats['failure'] +
+                    self.stats['skipped'] + self.stats['error'] -
+                    self.cnt_double_fail_tests)
+        print("NODE REPORTS: " + str(NODEREPORTS))
+        logfile.write('<?xml version="1.0" encoding="utf-8"?>')
+        logfile.write(Junit.testsuite(
+            self._get_global_properties_node(),
+            [concurrent_log_to_xml(x) for x in NODEREPORTS],
+            name=self.suite_name,
+            errors=self.stats['error'],
+            failures=self.stats['failure'],
+            skips=self.stats['skipped'],
+            tests=numtests,
+            time="%.3f" % suite_time_delta, ).unicode(indent=0))
+        logfile.close()
+
+    def add_stats(self, key):
+        XMLLOCK.acquire()
+        if key in self.stats:
+            self.stats[key] += 1
+        XMLLOCK.release()
+    
+    def node_reporter(self, report):
+        nodeid = getattr(report, 'nodeid', report)
+        # local hack to handle xdist report order
+        slavenode = getattr(report, 'node', None)
+
+        key = nodeid, slavenode
+        # NODELOCK.acquire()
+        if key in self.node_reporters:
+            # TODO: breasks for --dist=each
+            return self.node_reporters[key]
+
+        reporter = ConcurrentNodeReporter(nodeid, self)
+
+        self.node_reporters[key] = reporter
+        # NODEREPORTS.append(reporter.to_xml())
+        return reporter
+
+    def pytest_terminal_summary(self, terminalreporter):
+        terminalreporter.write_sep("-",
+                                   "generated xml file: %s" % (self.logfile))
+### ConcurrentTerminalReporter is used to provide terminal reporting for multiprocess mode
 class ConcurrentTerminalReporter(TerminalReporter):
     def __init__(self, reporter):
         TerminalReporter.__init__(self, reporter.config)
         self._tw = reporter._tw
         self.stats = STATS
 
-    # def pytest_collectreport(self, report):
-    #     # Show errors occurred during the collection instantly.
-    #     TerminalReporter.pytest_collectreport(self, report)
-    #     if report.failed:
-    #         if self.isatty:
-    #             self.rewrite('')  # erase the "collecting"/"collected" message
-    #         self.print_failure(report)
-    # def pytest_runtest_logstart(self, nodeid, location):
-    #     if self.showlongtestinfo:
-    #         line = self._locationline(nodeid, *location)
-    #         self.write_ensure_prefix(line, "")
-    #     elif self.showfspath:
-    #         fsid = nodeid.split("::")[0]
-    #         self.write_fspath_result(fsid, "")
+    def add_stats(self, key):
+        if key in self.stats:
+            self.stats[key] += 1
 
     def pytest_runtest_logreport(self, report):
-        # Show failures and errors occuring during running a test
-        # instantly.
-        # TerminalReporter.pytest_runtest_logreport(self, report)
         rep = report
         res = self.config.hook.pytest_report_teststatus(report=rep)
         cat, letter, word = res
@@ -257,3 +299,7 @@ def append_list(stats, cat, rep):
     mylist.append(rep)
     stats[cat] = mylist
     LOCK.release()
+
+def concurrent_log_to_xml(log):
+    return py.xml.raw(log)
+###----------------------------------------------------------------
