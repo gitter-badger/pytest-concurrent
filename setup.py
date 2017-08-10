@@ -24,7 +24,9 @@ setup(
                 ', multiprocess and gevent',
     long_description=read('README.rst'),
     py_modules=['pytest_concurrent'],
-    install_requires=['pytest>=3.1.1'],
+    install_requires=[
+        'pytest>=3.1.1',
+        'futures;python_version<"3.0"'],
     classifiers=[
         'Development Status :: 4 - Beta',
         'Framework :: Pytest',
@@ -39,10 +41,14 @@ setup(
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: Implementation :: CPython',
-        'Programming Language :: Python :: Implementation :: PyPy',
         'Operating System :: OS Independent',
         'License :: OSI Approved :: MIT License',
     ],
+    entry_points={
+        'pytest11': [
+            'concurrent = pytest_concurrent',
+        ],
+    },
     setup_requires=['pytest-runner'],
     tests_require=['pytest'],
 )

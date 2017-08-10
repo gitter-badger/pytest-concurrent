@@ -10,7 +10,7 @@ pytest-concurrent
     :target: https://ci.appveyor.com/project/reverbc/pytest-concurrent/branch/master
     :alt: See Build Status on AppVeyor
 
-Concurrently execute test cases with `multithread`, `multiprocess` and `asyncio`
+Concurrently execute test cases with `multi-thread`, `multi-process` and `gevent`
 
 ----
 
@@ -20,8 +20,12 @@ This `Pytest`_ plugin was generated with `Cookiecutter`_ along with `@hackebrot`
 Features
 --------
 
-* TODO
-
+* Testing concurrently with pytest, using one of the three modes
+    - Multiprocess (--concmode=mprocess)
+    - Multithread (--concmode=mthread)
+    - Asynchronous Network with gevent (--concmode=asyncnet)
+* The ability to designate the amount of work to be used for testing
+* The ability to put your tests into separate groups
 
 Requirements
 ------------

@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-import re
 import os
-import py
+import sys
 import time
 import multiprocessing
 import concurrent.futures
 import collections
 
+import py
 import pytest
 from _pytest.junitxml import LogXML
 from _pytest.terminal import TerminalReporter
@@ -15,16 +15,17 @@ from _pytest.junitxml import _NodeReporter
 from _pytest.junitxml import bin_xml_escape
 from _pytest.junitxml import mangle_test_address
 
-### Manager for the shared variables being used by in multiprocess mode
+# Manager for the shared variables being used by in multiprocess mode
 MANAGER = multiprocessing.Manager()
 
-### XMLSTATS is a shared variable used to override the local variable self.stats from LogXML
+# to override the variable self.stats from LogXML
 XMLSTATS = MANAGER.dict()
 XMLSTATS['error'] = 0
 XMLSTATS['passed'] = 0
 XMLSTATS['failure'] = 0
 XMLSTATS['skipped'] = 0
-### XMLLOCK ensures that XMLSTATS is not being modified simultaneously
+
+# ensures that XMLSTATS is not being modified simultaneously
 XMLLOCK = multiprocessing.Lock()
 
 XMLREPORTER = MANAGER.dict()
@@ -32,44 +33,78 @@ XMLREPORTER = MANAGER.dict()
 NODELOCK = multiprocessing.Lock()
 NODEREPORTS = MANAGER.list()
 
-### DICTIONARY is a shared variable used to keep track of the log for TerminalReporter
+# to keep track of the log for TerminalReporter
 DICTIONARY = MANAGER.dict()
-### STATS is a shared variable used to override the local variable self.stats from TerminalReporter
+
+# to override the variable self.stats from TerminalReporter
 STATS = MANAGER.dict()
-### LOCK ensures that STATS is not being modified simultaneously
+
+# ensures that STATS is not being modified simultaneously
 LOCK = multiprocessing.Lock()
+
 
 def pytest_addoption(parser):
     group = parser.getgroup('concurrent')
     group.addoption(
-        '--concurrent-mode',
+        '--concmode',
         action='store',
         dest='concurrent_mode',
         default=None,
-        help='Set the concurrent mode (multithread, multiprocess, asyncnetwork)'
+        help='Set the concurrent mode (mthread, mproc, asyncnet)'
     )
     group.addoption(
-        '--concurrent-worker',
+        '--concworkers',
         action='store',
         dest='concurrent_workers',
         default=None,
         help='Set the concurrent worker amount (default to maximum)'
     )
 
-    parser.addini('HELLO', 'Dummy pytest.ini setting')
+    parser.addini('concurrent_mode', 'Set the concurrent mode (mthread, mproc, asyncnet)')
+    parser.addini('concurrent_workers', 'Set the concurrent worker amount (default to maximum)')
+
 
 def pytest_runtestloop(session):
-    ### Use the variable to modify the mode of execution, avaliable options = multithread, multiprocess, async, sequential
+    ''' Use the variable to modify the mode of execution,
+    avaliable options = multithread, multiprocess, async, sequential'''
+
+    if (session.testsfailed and
+            not session.config.option.continue_on_collection_errors):
+        raise session.Interrupted(
+            "%d errors during collection" % session.testsfailed)
+
+    if session.config.option.collectonly:
+        return True
+
+    mode = session.config.option.concurrent_mode if session.config.option.concurrent_mode \
+        else session.config.getini('concurrent_mode')
+    if mode and mode not in ['mproc', 'mthread', 'asyncnet']:
+        raise NotImplementedError('Concurrent mode %s is not supported (available: mproc, mthread, asyncnet).' % mode)
+
+    try:
+        workers_raw = session.config.option.concurrent_workers if session.config.option.concurrent_workers else session.config.getini('concurrent_workers')
+        workers = int(workers_raw) if workers_raw else None
+
+        if sys.version_info < (3, 5) and sys.version_info > (3, 0):
+            # backport max worker: https://github.com/python/cpython/blob/3.5/Lib/concurrent/futures/thread.py#L91-L94
+            cpu_counter = os if sys.version_info > (3, 4) else multiprocessing
+            workers = (cpu_counter.cpu_count() or 1) * 5
+    except ValueError:
+        raise ValueError('Concurrent workers can only be integer.')
+
+    # group collected tests into different lists
     groups = collections.defaultdict(list)
     ungrouped_items = list()
     for item in session.items:
-        concurrent_group_marker = item.get_marker('concurrent_group')
+        concurrent_group_marker = item.get_marker('concgroup')
         concurrent_group = None
 
         if concurrent_group_marker is not None:
-            if 'args' in dir(concurrent_group_marker) and concurrent_group_marker.args:
+            if 'args' in dir(concurrent_group_marker) \
+                    and concurrent_group_marker.args:
                 concurrent_group = concurrent_group_marker.args[0]
-            if 'kwargs' in dir(concurrent_group_marker) and 'group' in concurrent_group_marker.kwargs:
+            if 'kwargs' in dir(concurrent_group_marker) \
+                    and 'group' in concurrent_group_marker.kwargs:
                 # kwargs beat args
                 concurrent_group = concurrent_group_marker.kwargs['group']
 
@@ -80,28 +115,17 @@ def pytest_runtestloop(session):
         else:
             ungrouped_items.append(item)
 
-    if (session.testsfailed and
-            not session.config.option.continue_on_collection_errors):
-        raise session.Interrupted(
-            "%d errors during collection" % session.testsfailed)
-
-    if session.config.option.collectonly:
-        return True
-
-    mode = session.config.option.concurrent_mode
-    worker = None if session.config.option.concurrent_workers is None else int(session.config.option.concurrent_workers)
-
     for group in sorted(groups):
-        _run_items(mode=mode, items=groups[group], session=session, worker=worker)
+        _run_items(mode=mode, items=groups[group], session=session, workers=workers)
     if ungrouped_items:
-        _run_items(mode=mode, items=ungrouped_items, session=session, worker=worker)
+        _run_items(mode=mode, items=ungrouped_items, session=session, workers=workers)
 
     return True
 
 
-def _run_items(mode, items, session, worker=None):
-    ### Multiprocess is not compatible with Windows !!! ###
-    if mode == "multiprocess":
+def _run_items(mode, items, session, workers=None):
+    ''' Multiprocess is not compatible with Windows !!! '''
+    if mode == "mproc":
         procs_pool = dict()
 
         for index, item in enumerate(items):
@@ -111,17 +135,17 @@ def _run_items(mode, items, session, worker=None):
         for proc in procs_pool:
             procs_pool[proc].join()
 
-    ## Achieve async using Python's concurrent library ###
-    elif mode == "multithread":
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    elif mode == "mthread":
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             for index, item in enumerate(items):
                 executor.submit(_run_next_item, session, item, index)
 
-    elif mode == "gevent":
+    elif mode == "asyncnet":
+        import gevent
         import gevent.monkey
         import gevent.pool
         gevent.monkey.patch_all()
-        pool = gevent.pool.Pool(size=worker)
+        pool = gevent.pool.Pool(size=workers)
         for index, item in enumerate(items):
             pool.spawn(_run_next_item, session, item, index)
         pool.join()
@@ -135,20 +159,25 @@ def _run_items(mode, items, session, worker=None):
 
 
 def _run_next_item(session, item, i):
-
-    nextitem = session.items[i+1] if i+1 < len(session.items) else None
+    nextitem = session.items[i + 1] if i + 1 < len(session.items) else None
     item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
     if session.shouldstop:
         raise session.Interrupted(session.shouldstop)
 
+
 @pytest.mark.trylast
 def pytest_configure(config):
-    # mode = session.config.option.concurrent_mode
-    standard_reporter = config.pluginmanager.getplugin('terminalreporter')
-    concurrent_reporter = ConcurrentTerminalReporter(standard_reporter)
+    config.addinivalue_line(
+        'markers',
+        'concgroup(group: int): concurrent group number to run tests in groups (smaller numbers are executed earlier)')
 
-    config.pluginmanager.unregister(standard_reporter)
-    config.pluginmanager.register(concurrent_reporter, 'terminalreporter')
+    if (config.option.concurrent_mode and config.option.concurrent_mode == 'mproc') or \
+            config.getini('concurrent_mode') == 'mproc':
+        standard_reporter = config.pluginmanager.getplugin('terminalreporter')
+        concurrent_reporter = ConcurrentTerminalReporter(standard_reporter)
+
+        config.pluginmanager.unregister(standard_reporter)
+        config.pluginmanager.register(concurrent_reporter, 'terminalreporter')
 
         if config.option.xmlpath is not None:
             xmlpath = config.option.xmlpath
@@ -157,7 +186,7 @@ def pytest_configure(config):
             config.pluginmanager.register(config._xml)
 
 
-### 
+###
 class ConcurrentNodeReporter(_NodeReporter):
     def __init__(self, nodeid, xml):
 
@@ -170,16 +199,14 @@ class ConcurrentNodeReporter(_NodeReporter):
         self.testcase = None
         self.attrs = {}
 
-    def to_xml(self): ##overriden 
+    def to_xml(self):  # overriden
         testcase = Junit.testcase(time=self.duration, **self.attrs)
-        print("TESTCASE:" + str(testcase) + " info = " + str(self.duration) + " " + str(self.attrs))
         testcase.append(self.make_properties_node())
         for node in self.nodes:
             testcase.append(node)
         return str(testcase.unicode(indent=0))
 
     def record_testreport(self, testreport):
-        print("TEST: " + str(testreport))
         assert not self.testcase
         names = mangle_test_address(testreport.nodeid)
         classnames = names[:-1]
@@ -197,13 +224,14 @@ class ConcurrentNodeReporter(_NodeReporter):
         self.attrs = attrs
 
     def finalize(self):
-        data = self.to_xml() #.unicode(indent=0)
+        data = self.to_xml()  # .unicode(indent=0)
         self.__dict__.clear()
         self.to_xml = lambda: py.xml.raw(data)
         NODEREPORTS.append(data)
 
-### ConcurrentLogXML is used to provide XML reporting for multiprocess mode
+
 class ConcurrentLogXML(LogXML):
+    '''to provide XML reporting for multiprocess mode'''
 
     def __init__(self, logfile, prefix, suite_name="pytest"):
         logfile = logfile
@@ -212,7 +240,7 @@ class ConcurrentLogXML(LogXML):
         self.prefix = prefix
         self.suite_name = suite_name
         self.stats = XMLSTATS
-        self.node_reporters = {}#XMLREPORTER  # nodeid -> _NodeReporter
+        self.node_reporters = {}  # XMLREPORTER  # nodeid -> _NodeReporter
         self.node_reporters_ordered = []
         self.global_properties = []
         # List of reports that failed on call but teardown is pending.
@@ -230,7 +258,7 @@ class ConcurrentLogXML(LogXML):
         numtests = (self.stats['passed'] + self.stats['failure'] +
                     self.stats['skipped'] + self.stats['error'] -
                     self.cnt_double_fail_tests)
-        print("NODE REPORTS: " + str(NODEREPORTS))
+        # print("NODE REPORTS: " + str(NODEREPORTS))
         logfile.write('<?xml version="1.0" encoding="utf-8"?>')
         logfile.write(Junit.testsuite(
             self._get_global_properties_node(),
@@ -248,7 +276,7 @@ class ConcurrentLogXML(LogXML):
         if key in self.stats:
             self.stats[key] += 1
         XMLLOCK.release()
-    
+
     def node_reporter(self, report):
         nodeid = getattr(report, 'nodeid', report)
         # local hack to handle xdist report order
@@ -269,8 +297,11 @@ class ConcurrentLogXML(LogXML):
     def pytest_terminal_summary(self, terminalreporter):
         terminalreporter.write_sep("-",
                                    "generated xml file: %s" % (self.logfile))
-### ConcurrentTerminalReporter is used to provide terminal reporting for multiprocess mode
+
+
 class ConcurrentTerminalReporter(TerminalReporter):
+    '''to provide terminal reporting for multiprocess mode'''
+
     def __init__(self, reporter):
         TerminalReporter.__init__(self, reporter.config)
         self._tw = reporter._tw
@@ -320,6 +351,7 @@ class ConcurrentTerminalReporter(TerminalReporter):
                 self._tw.write(" " + line)
                 self.currentfspath = -2
 
+
 def append_list(stats, cat, rep):
     LOCK.acquire()
     cat_string = str(cat)
@@ -331,6 +363,6 @@ def append_list(stats, cat, rep):
     stats[cat] = mylist
     LOCK.release()
 
+
 def concurrent_log_to_xml(log):
     return py.xml.raw(log)
-###----------------------------------------------------------------
