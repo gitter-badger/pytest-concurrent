@@ -47,7 +47,7 @@ Usage
 -----
 
 * Use this plugin by running pytest normally and use --concmode [mode name]
-* [mode name] should be one of the following (mprocess, mthread, or asyncnet)
+* [mode name] should be one of the following (mproc, mthread, or asyncnet)
 
 Contributing
 ------------
