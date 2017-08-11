@@ -65,8 +65,7 @@ def pytest_addoption(parser):
 
 
 def pytest_runtestloop(session):
-    ''' Use the variable to modify the mode of execution,
-    avaliable options = multithread, multiprocess, async, sequential'''
+    '''Initialize a single test session'''
 
     if (session.testsfailed and
             not session.config.option.continue_on_collection_errors):
@@ -186,8 +185,8 @@ def pytest_configure(config):
             config.pluginmanager.register(config._xml)
 
 
-###
 class ConcurrentNodeReporter(_NodeReporter):
+    '''to provide Node Reporting for multiprocess mode'''
     def __init__(self, nodeid, xml):
 
         self.id = nodeid
