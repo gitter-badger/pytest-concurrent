@@ -13,7 +13,7 @@ def read(fname):
 
 setup(
     name='pytest-concurrent',
-    version='0.1.0',
+    version='0.1.1',
     author='James Wang, Reverb Chu',
     author_email='jamesw96@uw.edu, reverbc@me.com',
     maintainer='James Wang, Reverb Chu',
