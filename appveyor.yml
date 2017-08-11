@@ -26,6 +26,7 @@ install:
   - "%PYTHON%/Scripts/pip install wheel"
 
 build: off  # Not a C# project, build stuff at the test step instead.
+test: off
 
 test_script:
   - "%PYTHON%/Scripts/tox -e %TOX_ENV%"
