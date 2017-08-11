@@ -21,7 +21,7 @@ Features
 --------
 
 * Testing concurrently with pytest, using one of the three modes
-    - Multiprocess (--concmode=mprocess)
+    - Multiprocess (--concmode=mproc)
     - Multithread (--concmode=mthread)
     - Asynchronous Network with gevent (--concmode=asyncnet)
 * The ability to designate the amount of work to be used for testing
