@@ -131,14 +131,17 @@ def pytest_runtestloop(session):
 def _run_items(mode, items, session, workers=None):
     ''' Multiprocess is not compatible with Windows !!! '''
     if mode == "mproc":
-        procs_pool = dict()
+        '''Using ThreadPoolExecutor as managers to control the lifecycle of processes.
+        Each thread will spawn a process and terminates when the process joins.
+        '''
+        def run_task_in_proc(item, index):
+            proc = multiprocessing.Process(target=_run_next_item, args=(session, item, index))
+            proc.start()
+            proc.join()
 
-        for index, item in enumerate(items):
-            procs_pool[index] = multiprocessing.Process(target=_run_next_item, args=(session, item, index))
-            procs_pool[index].start()
-
-        for proc in procs_pool:
-            procs_pool[proc].join()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            for index, item in enumerate(items):
+                executor.submit(run_task_in_proc, item, index)
 
     elif mode == "mthread":
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
