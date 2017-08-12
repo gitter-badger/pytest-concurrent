@@ -26,7 +26,8 @@ setup(
     py_modules=['pytest_concurrent'],
     install_requires=[
         'pytest>=3.1.1',
-        'futures;python_version<"3.0"'],
+        'futures;python_version<"3.0"',
+        'psutil>=5.2.2'],
     classifiers=[
         'Development Status :: 4 - Beta',
         'Framework :: Pytest',

@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import sys
+import pytest
 
 
 def test_help_message(testdir):
@@ -13,7 +15,10 @@ def test_help_message(testdir):
     ])
 
 
+@pytest.mark.skipif(sys.platform == 'win32',
+                    reason="does not run on windows")
 def test_ini_setting(testdir):
+    '''notice that this is not tested for windows'''
     concurrent_mode = 'mproc'
     concurrent_workers = 100
 

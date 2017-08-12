@@ -20,6 +20,7 @@ matrix:
 
 install:
   - pip install tox
+  - pip install psutil
 
 script:
   - tox -e $TOX_ENV

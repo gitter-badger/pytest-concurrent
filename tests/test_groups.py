@@ -1,7 +1,10 @@
 import time
+import sys
 import pytest
 
 
+@pytest.mark.skipif(sys.platform == 'win32',
+                    reason="does not run on windows")
 @pytest.mark.parametrize('mode', ['mthread', 'mproc'])
 def test_concurrent_group(testdir, mode):
     """Make sure that pytest accepts our fixture."""

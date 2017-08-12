@@ -10,7 +10,7 @@ pytest-concurrent
     :target: https://ci.appveyor.com/project/reverbc/pytest-concurrent/branch/master
     :alt: See Build Status on AppVeyor
 
-Concurrently execute test cases with `multi-thread`, `multi-process` and `gevent`
+Concurrently execute pytest testing with `multi-thread`, `multi-process` and `gevent`
 
 ----
 
@@ -30,7 +30,9 @@ Features
 Requirements
 ------------
 
-* TODO
+* Python version [2.7 +]
+* Python3 version [3.3 +]
+* Make sure you have the latest version of pytest installed for your environment
 
 
 Installation
@@ -44,7 +46,8 @@ You can install "pytest-concurrent" via `pip`_ from `PyPI`_::
 Usage
 -----
 
-* TODO
+* Use this plugin by running pytest normally and use --concmode [mode name]
+* [mode name] should be one of the following (mproc, mthread, or asyncnet)
 
 Contributing
 ------------

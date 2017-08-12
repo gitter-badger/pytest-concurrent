@@ -6,6 +6,7 @@ import multiprocessing
 import concurrent.futures
 import collections
 
+import psutil
 import py
 import pytest
 from _pytest.junitxml import LogXML
@@ -65,8 +66,7 @@ def pytest_addoption(parser):
 
 
 def pytest_runtestloop(session):
-    ''' Use the variable to modify the mode of execution,
-    avaliable options = multithread, multiprocess, async, sequential'''
+    '''Initialize a single test session'''
 
     if (session.testsfailed and
             not session.config.option.continue_on_collection_errors):
@@ -83,11 +83,16 @@ def pytest_runtestloop(session):
 
     try:
         workers_raw = session.config.option.concurrent_workers if session.config.option.concurrent_workers else session.config.getini('concurrent_workers')
+
+        # set worker amount to the collected test amount
+        if workers_raw == 'max':
+            workers_raw = len(session.items)
+
         workers = int(workers_raw) if workers_raw else None
 
         if sys.version_info < (3, 5) and sys.version_info > (3, 0):
             # backport max worker: https://github.com/python/cpython/blob/3.5/Lib/concurrent/futures/thread.py#L91-L94
-            cpu_counter = os if sys.version_info > (3, 4) else multiprocessing
+            cpu_counter = os if sys.version_info > (3, 4) else psutil
             workers = (cpu_counter.cpu_count() or 1) * 5
     except ValueError:
         raise ValueError('Concurrent workers can only be integer.')
@@ -126,14 +131,17 @@ def pytest_runtestloop(session):
 def _run_items(mode, items, session, workers=None):
     ''' Multiprocess is not compatible with Windows !!! '''
     if mode == "mproc":
-        procs_pool = dict()
+        '''Using ThreadPoolExecutor as managers to control the lifecycle of processes.
+        Each thread will spawn a process and terminates when the process joins.
+        '''
+        def run_task_in_proc(item, index):
+            proc = multiprocessing.Process(target=_run_next_item, args=(session, item, index))
+            proc.start()
+            proc.join()
 
-        for index, item in enumerate(items):
-            procs_pool[index] = multiprocessing.Process(target=_run_next_item, args=(session, item, index))
-            procs_pool[index].start()
-
-        for proc in procs_pool:
-            procs_pool[proc].join()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            for index, item in enumerate(items):
+                executor.submit(run_task_in_proc, item, index)
 
     elif mode == "mthread":
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
@@ -186,8 +194,8 @@ def pytest_configure(config):
             config.pluginmanager.register(config._xml)
 
 
-###
 class ConcurrentNodeReporter(_NodeReporter):
+    '''to provide Node Reporting for multiprocess mode'''
     def __init__(self, nodeid, xml):
 
         self.id = nodeid
