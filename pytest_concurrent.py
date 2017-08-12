@@ -6,6 +6,7 @@ import multiprocessing
 import concurrent.futures
 import collections
 
+import psutil
 import py
 import pytest
 from _pytest.junitxml import LogXML
@@ -86,7 +87,7 @@ def pytest_runtestloop(session):
 
         if sys.version_info < (3, 5) and sys.version_info > (3, 0):
             # backport max worker: https://github.com/python/cpython/blob/3.5/Lib/concurrent/futures/thread.py#L91-L94
-            cpu_counter = os if sys.version_info > (3, 4) else multiprocessing
+            cpu_counter = os if sys.version_info > (3, 4) else psutil
             workers = (cpu_counter.cpu_count() or 1) * 5
     except ValueError:
         raise ValueError('Concurrent workers can only be integer.')
