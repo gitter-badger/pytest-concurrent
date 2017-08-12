@@ -83,6 +83,11 @@ def pytest_runtestloop(session):
 
     try:
         workers_raw = session.config.option.concurrent_workers if session.config.option.concurrent_workers else session.config.getini('concurrent_workers')
+
+        # set worker amount to the collected test amount
+        if workers_raw == 'max':
+            workers_raw = len(session.items)
+
         workers = int(workers_raw) if workers_raw else None
 
         if sys.version_info < (3, 5) and sys.version_info > (3, 0):
