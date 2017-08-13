@@ -2,6 +2,10 @@
 pytest-concurrent
 =================
 
+.. image:: https://badge.fury.io/py/pytest-concurrent.svg
+    :target: https://badge.fury.io/py/pytest-concurrent
+    :alt: See package version on PYPI
+
 .. image:: https://travis-ci.org/reverbc/pytest-concurrent.svg?branch=master
     :target: https://travis-ci.org/reverbc/pytest-concurrent
     :alt: See Build Status on Travis CI
